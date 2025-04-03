@@ -91,7 +91,9 @@ public interface State<G extends Game> {
      * @return a move.
      */
     default Move<G> chooseMove(int player) {
+        // Make the possible move
         Iterator<Move<G>> iterator = moveIterator(player);
+        // If player can still move then it's wrong
         if (iterator.hasNext()) return iterator.next();
         throw new RuntimeException("empty move iterator");
     }

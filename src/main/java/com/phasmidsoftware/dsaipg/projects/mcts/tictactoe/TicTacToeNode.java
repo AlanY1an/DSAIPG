@@ -86,6 +86,12 @@ public class TicTacToeNode implements Node<TicTacToe> {
         initializeNodeData();
     }
 
+    public void updateStats(int reward) {
+        this.wins += reward;
+        this.playouts++;
+    }
+
+
     private void initializeNodeData() {
         if (isLeaf()) {
             playouts = 1;
@@ -96,6 +102,7 @@ public class TicTacToeNode implements Node<TicTacToe> {
                 wins = 1; // a draw.
         }
     }
+
 
     private final State<TicTacToe> state;
     private final ArrayList<Node<TicTacToe>> children;

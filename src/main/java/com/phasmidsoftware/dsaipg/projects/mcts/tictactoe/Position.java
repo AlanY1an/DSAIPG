@@ -64,9 +64,9 @@ public class Position {
         if (player == last) throw new RuntimeException("consecutive moves by same player: " + player);
         int[][] matrix = copyGrid();
         if (matrix[x][y] < 0) {
-            // TO BE IMPLEMENTED 
-             return null;
-            // END SOLUTION
+            // If the position is empty
+            matrix[x][y] = player;
+            return new Position(matrix, count + 1, player);
         }
         throw new RuntimeException("Position is occupied: " + x + ", " + y);
     }
@@ -82,11 +82,17 @@ public class Position {
         for (int i = 0; i < gridSize; i++)
             for (int j = 0; j < gridSize; j++)
                 if (grid[i][j] < 0)
-                    // TO BE IMPLEMENTED 
+                    // if the position is empty, put this position into result array
+                    result.add(new int[] {i, j});
          ;
-        // END SOLUTION
         return result;
     }
+
+    public int[][] getGrid() {
+        // 返回棋盘副本，确保外部调用者不会直接修改内部数组
+        return copyGrid();
+    }
+
 
     /**
      * Method to yield a copy of this Position but reflected.
@@ -144,10 +150,38 @@ public class Position {
      * @return true if there are three cells in a line that are the same and equal to the last player.
      */
     boolean threeInARow() {
-        // TO BE IMPLEMENTED 
+        // Check the row
+        for (int i = 0; i < gridSize; i++) {
+            if (checkThree(grid[i][0], grid[i][1], grid[i][2])) {
+                return true;
+            }
+        }
+
+        // Check the Column
+        for (int j = 0; j < gridSize; j++) {
+            if (checkThree(grid[0][j], grid[1][j], grid[2][j])) {
+                return true;
+            }
+        }
+
+        // Check the diagonal
+        if (checkThree(grid[0][0], grid[1][1], grid[2][2])) {
+            return true;
+        }
+
+        if (checkThree(grid[0][2], grid[1][1], grid[2][0])) {
+            return true;
+        }
+        // No winner
          return false;
-        // END SOLUTION
     }
+
+    // Helper for the above function
+    private boolean checkThree(int a, int b, int c) {
+        return a == b && b == c && a != -1;
+    }
+
+
 
     /**
      * Project row i.

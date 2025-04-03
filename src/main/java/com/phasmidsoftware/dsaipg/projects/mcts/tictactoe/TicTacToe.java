@@ -48,6 +48,7 @@ public class TicTacToe implements Game<TicTacToe> {
         State<TicTacToe> state = start();
         int player = opener();
         while (!state.isTerminal()) {
+            System.out.print(state);
             state = state.next(state.chooseMove(player));
             player = 1 - player;
         }
@@ -197,6 +198,7 @@ public class TicTacToe implements Game<TicTacToe> {
          * @return all the possible moves from this state.
          */
         public Collection<Move<TicTacToe>> moves(int player) {
+            // If player is not the play who made the last move
             if (player == position.last) throw new RuntimeException("consecutive moves by same player: " + player);
             List<int[]> moves = position.moves(player);
             ArrayList<Move<TicTacToe>> list = new ArrayList<>();
