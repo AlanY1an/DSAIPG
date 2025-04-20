@@ -15,7 +15,7 @@ public class GomokuMain {
             if (currentPlayer == Gomoku.PLAYER_ONE) {
                 GomokuNode rootNode = new GomokuNode(state);
                 MCTS mcts = new MCTS(rootNode);
-                move = mcts.findNextMove(500);
+                move = mcts.findNextMove(5000);
                 System.out.println("MCTS (X) Move: " + ((GomokuMove) move).toString());
             } else {
                 move = state.chooseMove(currentPlayer);

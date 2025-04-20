@@ -93,15 +93,20 @@ public class MCTS {
     private int simulatePlayout(State<Gomoku> state) {
         State<Gomoku> tempState = state;
         int currentPlayer = getPreviousPlayer(tempState);
-        while (!tempState.isTerminal()) {
-            Move<Gomoku> move = tempState.chooseMove(tempState.player());
+        int maxSteps = 50;
+
+        int steps = 0;
+        while (!tempState.isTerminal() && steps < maxSteps) {
+            Move<Gomoku> move = chooseMoveNearStones(tempState, 2);
             tempState = tempState.next(move);
+            steps++;
         }
         Optional<Integer> winnerOpt = tempState.winner();
         if (!winnerOpt.isPresent()) return 1; // Draw
         if (winnerOpt.get() == currentPlayer) return 2; // Win
         return 0; // Loss
     }
+
 
     private void updateNode(SimpleNode<Gomoku> node, int reward) {
         node.updateStats(reward);
@@ -123,4 +128,48 @@ public class MCTS {
     private int getPreviousPlayer(State<Gomoku> state) {
         return (state.player() == Gomoku.PLAYER_ONE) ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE;
     }
+
+    private Move<Gomoku> chooseMoveNearStones(State<Gomoku> state, int range) {
+        int[][] board = ((GomokuState) state).getBoard();
+        List<int[]> candidates = new ArrayList<>();
+        int size = board.length;
+
+        boolean[][] mark = new boolean[size][size];
+
+        // 标记所有已有棋子周围range范围的空格
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                if (board[i][j] != 0) { // 有棋子
+                    for (int dx = -range; dx <= range; dx++) {
+                        for (int dy = -range; dy <= range; dy++) {
+                            int ni = i + dx;
+                            int nj = j + dy;
+                            if (ni >= 0 && nj >= 0 && ni < size && nj < size && board[ni][nj] == 0) {
+                                mark[ni][nj] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 收集所有被标记的空格
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                if (mark[i][j]) {
+                    candidates.add(new int[]{i, j});
+                }
+            }
+        }
+
+        // 如果没有任何附近空格（比如刚开局），那就随机整个棋盘
+        if (candidates.isEmpty()) {
+            return state.chooseMove(state.player());
+        } else {
+            int[] movePos = candidates.get(random.nextInt(candidates.size()));
+            return new GomokuMove(state.player(), movePos[0], movePos[1]);
+        }
+    }
+
 }
+
