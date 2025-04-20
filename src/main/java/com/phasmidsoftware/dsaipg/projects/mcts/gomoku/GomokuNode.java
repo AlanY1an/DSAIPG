@@ -46,7 +46,7 @@ public class GomokuNode implements SimpleNode<Gomoku> {
         return playouts;
     }
 
-    // 用于 MCTS 更新统计数据
+    // For MCTS to update States
     public void updateStats(int reward) {
         this.playouts++;
         this.wins += reward;

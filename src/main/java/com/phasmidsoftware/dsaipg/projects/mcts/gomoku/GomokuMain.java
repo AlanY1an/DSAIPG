@@ -4,10 +4,13 @@ import com.phasmidsoftware.dsaipg.projects.mcts.core.Move;
 import java.util.Optional;
 
 /**
- * GomokuMain 用来测试不同模型（Random, MCTS, OptimizedMCTS）之间的对战效果。
- * 可以自由选择 X玩家和O玩家使用的模型。
+ * GomokuMain is used to test matches between different agents (Random, MCTS, OptimizedMCTS).
+ * You can control which agent plays X and which plays O through command-line arguments.
+ *
+ * Usage: java GomokuMain <X-strategy> <O-strategy>
+ * Strategies: RANDOM, MCTS, OPTIMIZED_MCTS
  */
-public class    GomokuMain {
+public class GomokuMain {
 
     enum PlayerType {
         RANDOM,
@@ -15,13 +18,18 @@ public class    GomokuMain {
         OPTIMIZED_MCTS
     }
 
-    private static final int ITERATIONS = 1000; // MCTS/OptimizedMCTS搜索迭代次数
+    private static final int ITERATIONS = 1000; // Number of MCTS/OptimizedMCTS search iterations
 
     public static void main(String[] args) {
+        // Default: OptimizedMCTS plays X, MCTS plays O
+        PlayerType player2 = PlayerType.MCTS;
+        PlayerType player1 = PlayerType.OPTIMIZED_MCTS;
 
-        // 选择 X 和 O 双方使用的策略
-        PlayerType player1 = PlayerType.MCTS;            // X 方 (先手)
-        PlayerType player2 = PlayerType.OPTIMIZED_MCTS;  // O 方 (后手)
+        // If user provides command-line arguments, override defaults
+        if (args.length >= 2) {
+            player1 = PlayerType.valueOf(args[0].toUpperCase());
+            player2 = PlayerType.valueOf(args[1].toUpperCase());
+        }
 
         Gomoku game = new Gomoku();
         GomokuState state = (GomokuState) game.start();
@@ -29,27 +37,32 @@ public class    GomokuMain {
         System.out.println("Start New Game: " + player1 + " (X) vs " + player2 + " (O)");
         System.out.println(state);
 
+        // Main game loop
         while (!state.isTerminal()) {
             int currentPlayer = state.player();
-            PlayerType playerType = currentPlayer == Gomoku.PLAYER_ONE ? player1 : player2;
-
+            PlayerType playerType = (currentPlayer == Gomoku.PLAYER_ONE) ? player1 : player2;
             Move<Gomoku> move = decideMove(state, playerType);
-
-            System.out.printf("%s (%s) Move: %s%n", playerType, (currentPlayer == Gomoku.PLAYER_ONE ? "X" : "O"), move);
+            System.out.printf("%s (%s) Move: %s%n", playerType,
+                    (currentPlayer == Gomoku.PLAYER_ONE ? "X" : "O"), move);
 
             state = (GomokuState) state.next(move);
             System.out.println(state);
             System.out.println("--------------------------------------");
         }
 
+        // Announce winner
         Optional<Integer> winner = state.winner();
         if (winner.isPresent()) {
-            System.out.println("Game Over! Winner: Player " + (winner.get() == Gomoku.PLAYER_ONE ? "X" : "O"));
+            System.out.println("Game Over! Winner: Player " +
+                    (winner.get() == Gomoku.PLAYER_ONE ? "X" : "O"));
         } else {
             System.out.println("Game Over! Result: Draw");
         }
     }
 
+    /**
+     * Choose a move based on the player's assigned strategy type.
+     */
     private static Move<Gomoku> decideMove(GomokuState state, PlayerType type) {
         switch (type) {
             case RANDOM:

@@ -13,217 +13,457 @@ import static java.lang.Math.sqrt;
 public class OptimizedMCTS {
 
     private final SimpleNode<Gomoku> root;
-    private static final double BASE_EXPLORATION_CONSTANT = 1.4;
+    private static final double EXPLORATION_CONSTANT = 1.8;
     private static final double EPSILON = 1e-6;
     private static final Random random = new Random();
-
-    // Tuning parameters
-    private static final int MAX_EXPANSIONS = 5;
-    private static final int MAX_PLAYOUT_STEPS = 20;
-    private static final int EARLY_GAME_STONES = 8;
-    private static final int CENTER_RADIUS = 4;
+    private final ExecutorService executor;
 
     public OptimizedMCTS(SimpleNode<Gomoku> root) {
         this.root = root;
+        this.executor = Executors.newFixedThreadPool(Math.max(1, Runtime.getRuntime().availableProcessors()));
     }
 
+    // Find the best move using MCTS with parallel iterations
     public Move<Gomoku> findNextMove(int iterations) {
-        // Early game: if board empty, play center
-        GomokuState rootState = (GomokuState) root.state();
-        int[][] board = rootState.getBoard();
-        boolean empty = true;
-        for (int[] row : board) {
-            for (int cell : row) {
-                if (cell != 0) { empty = false; break; }
-            }
-            if (!empty) break;
-        }
-        if (empty) {
-            int center = board.length / 2;
-            return new GomokuMove(rootState.player(), center, center);
-        }
-
-        // Standard MCTS iterations
-        for (int i = 0; i < iterations; i++) {
-            List<SimpleNode<Gomoku>> path = tracePath(root);
-            SimpleNode<Gomoku> leaf = path.get(path.size() - 1);
-
-            if (!leaf.state().isTerminal()) {
-                expandNode(leaf);
-                if (!leaf.children().isEmpty()) {
-                    SimpleNode<Gomoku> next = selectChild(leaf);
-                    path.add(next);
-                    leaf = next;
+        int[][] board = ((GomokuState) root.state()).getBoard();
+        int size = board.length;
+        boolean isEmpty = true;
+        for (int i = 0; i < size && isEmpty; i++) {
+            for (int j = 0; j < size; j++) {
+                if (board[i][j] != 0) {
+                    isEmpty = false;
+                    break;
                 }
             }
+        }
 
-            int reward = simulatePlayout(leaf.state());
-            for (SimpleNode<Gomoku> node : path) {
-                node.updateStats(reward);
+        // Return center move for empty board
+        if (isEmpty) {
+            int center = size / 2;
+            return new GomokuMove(root.state().player(), center, center);
+        }
+
+        int adjustedIterations = iterations;
+        // Increase iterations for critical board states
+        if (hasCriticalPattern(board, root.state().player())) {
+            adjustedIterations *= 2;
+        }
+
+        int threads = Math.max(1, Runtime.getRuntime().availableProcessors());
+        int iterationsPerThread = Math.max(1, adjustedIterations / threads);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < threads; i++) {
+            futures.add(executor.submit(() -> {
+                try {
+                    for (int j = 0; j < iterationsPerThread; j++) {
+                        List<SimpleNode<Gomoku>> path = new ArrayList<>();
+                        path.add(root);
+                        SimpleNode<Gomoku> node = root;
+
+                        while (!node.isLeaf() && !node.children().isEmpty()) {
+                            node = selectChild(node);
+                            path.add(node);
+                        }
+
+                        if (!node.state().isTerminal()) {
+                            synchronized (node) {
+                                if (node.isLeaf()) {
+                                    expandNode(node);
+                                }
+                                if (!node.children().isEmpty()) {
+                                    node = selectChild(node);
+                                    path.add(node);
+                                }
+                            }
+                        }
+
+                        int reward = simulatePlayout(node.state());
+
+                        for (SimpleNode<Gomoku> n : path) {
+                            synchronized (n) {
+                                n.updateStats(reward);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }));
+        }
+
+        for (Future<?> future : futures) {
+            try {
+                future.get();
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
             }
         }
 
-        // Select best child by win rate
-        SimpleNode<Gomoku> best = null;
-        double bestRate = -1;
-        for (SimpleNode<Gomoku> c : root.children()) {
-            if (c.playouts() == 0) continue;
-            double rate = (double) c.wins() / c.playouts();
-            if (rate > bestRate) {
-                bestRate = rate;
-                best = c;
+        SimpleNode<Gomoku> bestChild = null;
+        double bestScore = -Double.MAX_VALUE;
+        synchronized (root) {
+            for (SimpleNode<Gomoku> child : root.children()) {
+                if (child.playouts() == 0) continue;
+                double score = (double) child.wins() / child.playouts();
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestChild = child;
+                }
             }
         }
-        if (best != null) return extractMove(root.state(), best.state());
-        return rootState.chooseMove(rootState.player());
+
+        return bestChild == null ? null : extractMove(root.state(), bestChild.state());
     }
 
-    // Tree traversal
-    private List<SimpleNode<Gomoku>> tracePath(SimpleNode<Gomoku> node) {
-        List<SimpleNode<Gomoku>> path = new ArrayList<>();
-        path.add(node);
-        while (!node.isLeaf() && !node.children().isEmpty()) {
-            node = selectChild(node);
-            path.add(node);
+    public void shutdown() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(1, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
         }
-        return path;
     }
 
     private SimpleNode<Gomoku> selectChild(SimpleNode<Gomoku> node) {
-        double total = node.playouts() + 1;
-        SimpleNode<Gomoku> best = null;
-        double bestVal = Double.NEGATIVE_INFINITY;
-        for (SimpleNode<Gomoku> c : node.children()) {
-            double w = (double) c.wins() / (c.playouts() + EPSILON);
-            double u = BASE_EXPLORATION_CONSTANT * sqrt(log(total) / (c.playouts() + EPSILON));
-            double bias = centerBias(c.state());
-            double val = w + u + bias;
-            if (val > bestVal) {
-                bestVal = val;
-                best = c;
-            }
-        }
-        return best;
-    }
+        synchronized (node) {
+            if (node.children().isEmpty()) return node;
 
-    private void expandNode(SimpleNode<Gomoku> node) {
-        int count = 0;
-        for (Move<Gomoku> m : node.state().moves(node.state().player())) {
-            if (count++ >= MAX_EXPANSIONS) break;
-            node.addChild(node.state().next(m));
-        }
-    }
+            SimpleNode<Gomoku> best = null;
+            double bestValue = -Double.MAX_VALUE;
+            double totalPlayouts = node.playouts() + 1;
 
-    // Simulation
-    private int simulatePlayout(State<Gomoku> state) {
-        State<Gomoku> s = state;
-        int prev = opponent(s.player());
-        int steps = 0;
-        while (!s.isTerminal() && steps++ < MAX_PLAYOUT_STEPS) {
-            s = s.next(chooseSmartMove(s));
-        }
-        Optional<Integer> w = s.winner();
-        return w.map(win -> (win == prev ? 2 : 0)).orElse(1);
-    }
+            for (SimpleNode<Gomoku> child : node.children()) {
+                double childPlayouts = child.playouts() + EPSILON;
+                double exploitation = (double) child.wins() / childPlayouts;
+                double exploration = EXPLORATION_CONSTANT * sqrt(log(totalPlayouts) / childPlayouts);
+                double heuristicBias = getHeuristicBias(child.state(), node.state().player()) / childPlayouts;
 
-    // Heuristic policy
-    private Move<Gomoku> chooseSmartMove(State<Gomoku> state) {
-        int player = state.player();
-        // win or block
-        for (Move<Gomoku> m : state.moves(player)) {
-            State<Gomoku> ns = state.next(m);
-            if (ns.isTerminal()) {
-                Optional<Integer> w = ns.winner();
-                if (w.isPresent()) {
-                    if (w.get() == player) return m;
-                    if (w.get() == opponent(player)) return m;
+                double uctValue = exploitation + exploration + heuristicBias;
+                if (uctValue > bestValue) {
+                    bestValue = uctValue;
+                    best = child;
                 }
             }
+
+            return best;
         }
-        // early game center bias
-        int stones = countStones(((GomokuState) state).getBoard());
-        if (stones < EARLY_GAME_STONES) return chooseFromCenter(state);
-        // neighbor heuristic
-        return neighborHeuristic(state);
     }
 
-    private Move<Gomoku> chooseFromCenter(State<Gomoku> state) {
-        int[][] b = ((GomokuState) state).getBoard();
-        int n = b.length, mid = n / 2;
-        List<int[]> cands = new ArrayList<>();
-        for (int i = mid - CENTER_RADIUS; i <= mid + CENTER_RADIUS; i++) {
-            for (int j = mid - CENTER_RADIUS; j <= mid + CENTER_RADIUS; j++) {
-                if (i >= 0 && j >= 0 && i < n && j < n && b[i][j] == 0) cands.add(new int[]{i, j});
-            }
-        }
-        if (!cands.isEmpty()) {
-            int[] p = cands.get(random.nextInt(cands.size()));
-            return new GomokuMove(state.player(), p[0], p[1]);
-        }
-        return state.chooseMove(state.player());
-    }
-
-    private Move<Gomoku> neighborHeuristic(State<Gomoku> state) {
-        int[][] b = ((GomokuState) state).getBoard();
-        int n = b.length, player = state.player();
-        boolean[][] mark = new boolean[n][n];
-        for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) if (b[i][j] != 0)
-            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) {
-                int x = i + dx, y = j + dy;
-                if (x >= 0 && y >= 0 && x < n && y < n && b[x][y] == 0) mark[x][y] = true;
-            }
-        int best = -1; List<int[]> opts = new ArrayList<>();
-        for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) if (mark[i][j]) {
-            int sc = evaluateMove(b, player, i, j);
-            if (sc > best) { best = sc; opts.clear(); opts.add(new int[]{i, j}); }
-            else if (sc == best) opts.add(new int[]{i, j});
-        }
-        if (!opts.isEmpty()) {
-            int[] p = opts.get(random.nextInt(opts.size()));
-            return new GomokuMove(player, p[0], p[1]);
-        }
-        return state.chooseMove(player);
-    }
-
-    // Utilities
-    private int opponent(int p) { return p == Gomoku.PLAYER_ONE ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE; }
-    private int countStones(int[][] b) { int c = 0; for (int[] r : b) for (int v : r) if (v != 0) c++; return c; }
-    private Move<Gomoku> extractMove(State<Gomoku> rs, State<Gomoku> cs) {
-        int[][] a = ((GomokuState) rs).getBoard(), b = ((GomokuState) cs).getBoard();
-        for (int i = 0; i < a.length; i++) for (int j = 0; j < a.length; j++)
-            if (a[i][j] != b[i][j]) return new GomokuMove(rs.player(), i, j);
-        return null;
-    }
-    private double centerBias(State<Gomoku> s) {
-        int[][] curr = ((GomokuState) s).getBoard();
-        int[][] rootB = ((GomokuState) root.state()).getBoard();
+    private double getHeuristicBias(State<Gomoku> state, int player) {
+        int[][] board = ((GomokuState) state).getBoard();
+        int[][] rootBoard = ((GomokuState) root.state()).getBoard();
         int x = -1, y = -1;
-        for (int i = 0; i < curr.length; i++) {
-            for (int j = 0; j < curr.length; j++) {
-                if (curr[i][j] != rootB[i][j]) { x = i; y = j; break; }
+
+        for (int i = 0; i < board.length; i++) {
+            for (int j = 0; j < board[i].length; j++) {
+                if (board[i][j] != rootBoard[i][j]) {
+                    x = i;
+                    y = j;
+                    break;
+                }
             }
             if (x != -1) break;
         }
-        if (x < 0) return 0;
-        double mid = (curr.length - 1) / 2.0;
-        double d = Math.hypot(x - mid, y - mid);
-        return Math.max(0, (CENTER_RADIUS - d) / CENTER_RADIUS);
+
+        if (x == -1) return 0;
+
+        int opponent = player == Gomoku.PLAYER_ONE ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE;
+        int ownScore = evaluateMove(board, player, x, y);
+        int opponentScore = evaluateMove(board, opponent, x, y);
+
+        if (opponentScore >= 5000000) return opponentScore / 20.0;
+        if (ownScore >= 4000000) return ownScore / 25.0;
+        if (ownScore >= 3000000) return ownScore / 30.0;
+        if (opponentScore >= 2000000) return opponentScore / 35.0;
+        if (ownScore >= 1000000) return ownScore / 40.0;
+        if (opponentScore >= 900000) return opponentScore / 45.0;
+        return (ownScore * 0.3 + opponentScore * 5.0) / 1000.0;
     }
-    private int evaluateMove(int[][] b, int p, int x, int y) {
-        int opp = opponent(p);
-        int[] dx = {1, 0, 1, 1}, dy = {0, 1, 1, -1};
-        int sc = 0;
-        for (int d = 0; d < 4; d++) {
-            int co = 0, cp = 0;
-            for (int k = -2; k <= 2; k++) {
-                int xi = x + dx[d] * k, yi = y + dy[d] * k;
-                if (xi >= 0 && yi >= 0 && xi < b.length && yi < b.length) {
-                    if (b[xi][yi] == p) co++;
-                    if (b[xi][yi] == opp) cp++;
+
+    // Expand node with prioritized moves
+    private void expandNode(SimpleNode<Gomoku> node) {
+        Collection<Move<Gomoku>> moves = node.state().moves(node.state().player());
+        List<Move<Gomoku>> prioritizedMoves = prioritizeMoves(moves, node.state());
+        int maxExpansions = Math.min(prioritizedMoves.size(), 15);
+
+        for (int i = 0; i < maxExpansions; i++) {
+            State<Gomoku> newState = node.state().next(prioritizedMoves.get(i));
+            node.addChild(newState);
+        }
+    }
+
+    // Prioritize moves based on critical patterns
+    private List<Move<Gomoku>> prioritizeMoves(Collection<Move<Gomoku>> moves, State<Gomoku> state) {
+        List<MoveScore> scoredMoves = new ArrayList<>();
+        int[][] board = ((GomokuState) state).getBoard();
+        int player = state.player();
+        int opponent = player == Gomoku.PLAYER_ONE ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE;
+        int size = board.length;
+
+        List<int[]> occupied = new ArrayList<>();
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                if (board[i][j] != 0) occupied.add(new int[]{i, j});
+            }
+        }
+
+        List<Move<Gomoku>> nearbyMoves = new ArrayList<>();
+        for (Move<Gomoku> move : moves) {
+            int x = ((GomokuMove) move).getX();
+            int y = ((GomokuMove) move).getY();
+            boolean isNearby = occupied.isEmpty();
+            for (int[] pos : occupied) {
+                if (Math.abs(x - pos[0]) + Math.abs(y - pos[1]) <= 2) {
+                    isNearby = true;
+                    break;
                 }
             }
-            sc += co * 2 + cp;
+            if (isNearby) nearbyMoves.add(move);
         }
-        return sc;
+        if (nearbyMoves.isEmpty()) nearbyMoves.addAll(moves);
+
+        for (Move<Gomoku> move : nearbyMoves) {
+            int x = ((GomokuMove) move).getX();
+            int y = ((GomokuMove) move).getY();
+
+            int ownScore = evaluateMove(board, player, x, y);
+            int opponentScore = evaluateMove(board, opponent, x, y);
+
+            int[][] tempBoard = deepCopy(board);
+            tempBoard[x][y] = player;
+            if (hasWinningPattern(tempBoard, x, y, player)) {
+                scoredMoves.add(new MoveScore(move, Integer.MAX_VALUE));
+                continue;
+            }
+
+            tempBoard = deepCopy(board);
+            tempBoard[x][y] = opponent;
+            if (hasWinningPattern(tempBoard, x, y, opponent)) {
+                scoredMoves.add(new MoveScore(move, Integer.MAX_VALUE - 1));
+                continue;
+            }
+
+            // Boost score for moves creating forcing sequences
+            int forcingBonus = 0;
+            if (ownScore >= 3000000) {
+                tempBoard = deepCopy(board);
+                tempBoard[x][y] = player;
+                for (int i = 0; i < size; i++) {
+                    for (int j = 0; j < size; j++) {
+                        if (tempBoard[i][j] == 0) {
+                            tempBoard[i][j] = player;
+                            if (hasFourOrOpenThree(tempBoard, i, j, player, true)) {
+                                forcingBonus += 1000000;
+                            }
+                            tempBoard[i][j] = 0;
+                        }
+                    }
+                }
+            }
+
+            int score = Math.max(ownScore, opponentScore * 12) + forcingBonus;
+            scoredMoves.add(new MoveScore(move, score));
+        }
+
+        scoredMoves.sort((a, b) -> Integer.compare(b.score, a.score));
+        return scoredMoves.stream().map(ms -> ms.move).collect(Collectors.toList());
+    }
+
+    private static class MoveScore {
+        Move<Gomoku> move;
+        int score;
+        MoveScore(Move<Gomoku> move, int score) {
+            this.move = move;
+            this.score = score;
+        }
+    }
+
+    private boolean hasWinningPattern(int[][] board, int x, int y, int player) {
+        int[][] dirs = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
+        for (int[] d : dirs) {
+            int count = 1;
+            for (int k = 1; k < 5; k++) {
+                int nx = x + d[0] * k;
+                int ny = y + d[1] * k;
+                if (nx < 0 || ny < 0 || nx >= board.length || ny >= board.length || board[nx][ny] != player) break;
+                count++;
+            }
+            for (int k = 1; k < 5; k++) {
+                int nx = x - d[0] * k;
+                int ny = y - d[1] * k;
+                if (nx < 0 || ny < 0 || nx >= board.length || ny >= board.length || board[nx][ny] != player) break;
+                count++;
+            }
+            if (count >= 5) return true;
+        }
+        return false;
+    }
+
+    private boolean hasFourOrOpenThree(int[][] board, int x, int y, int player, boolean checkFour) {
+        int[][] dirs = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
+        for (int[] d : dirs) {
+            int consecutive = 0;
+            int openEnds = 0;
+
+            for (int step = 1; step <= 4; step++) {
+                int nx = x + d[0] * step;
+                int ny = y + d[1] * step;
+                if (nx < 0 || ny < 0 || nx >= board.length || ny >= board.length) break;
+                if (board[nx][ny] == player) consecutive++;
+                else if (board[nx][ny] == 0) { openEnds++; break; }
+                else break;
+            }
+
+            for (int step = 1; step <= 4; step++) {
+                int nx = x - d[0] * step;
+                int ny = y - d[1] * step;
+                if (nx < 0 || ny < 0 || nx >= board.length || ny >= board.length) break;
+                if (board[nx][ny] == player) consecutive++;
+                else if (board[nx][ny] == 0) { openEnds++; break; }
+                else break;
+            }
+
+            if (checkFour && consecutive == 4 && openEnds >= 1) return true;
+            if (!checkFour && consecutive == 3 && openEnds == 2) return true;
+        }
+        return false;
+    }
+
+    private boolean hasCriticalPattern(int[][] board, int player) {
+        int opponent = player == Gomoku.PLAYER_ONE ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE;
+        int size = board.length;
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                if (board[i][j] == 0) {
+                    int[][] tempBoard = deepCopy(board);
+                    tempBoard[i][j] = opponent;
+                    if (hasFourOrOpenThree(tempBoard, i, j, opponent, true) || hasFourOrOpenThree(tempBoard, i, j, opponent, false)) {
+                        return true;
+                    }
+                    tempBoard[i][j] = player;
+                    if (hasFourOrOpenThree(tempBoard, i, j, player, true) || hasFourOrOpenThree(tempBoard, i, j, player, false)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private int simulatePlayout(State<Gomoku> state) {
+        State<Gomoku> tempState = state;
+        int currentPlayer = getPreviousPlayer(tempState);
+        int maxSteps = 60;
+        int steps = 0;
+
+        while (!tempState.isTerminal() && steps < maxSteps) {
+            Collection<Move<Gomoku>> moves = tempState.moves(tempState.player());
+            List<MoveScore> scoredMoves = new ArrayList<>();
+            int[][] board = ((GomokuState) tempState).getBoard();
+            int player = tempState.player();
+            int opponent = player == Gomoku.PLAYER_ONE ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE;
+
+            for (Move<Gomoku> move : moves) {
+                int x = ((GomokuMove) move).getX();
+                int y = ((GomokuMove) move).getY();
+                int score = evaluateMove(board, player, x, y);
+                scoredMoves.add(new MoveScore(move, score));
+            }
+
+            scoredMoves.sort((a, b) -> Integer.compare(b.score, a.score));
+            Move<Gomoku> move = scoredMoves.isEmpty() ? moves.iterator().next() : scoredMoves.get(0).move;
+            tempState = tempState.next(move);
+            steps++;
+        }
+
+        Optional<Integer> winnerOpt = tempState.winner();
+        return winnerOpt.map(w -> w == currentPlayer ? 2 : 0).orElse(1);
+    }
+
+    // Evaluate move for critical patterns
+    private int evaluateMove(int[][] board, int player, int x, int y) {
+        int score = 0;
+        int opponent = player == Gomoku.PLAYER_ONE ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE;
+        int size = board.length;
+
+        // Check board occupancy for center preference
+        int occupiedCount = 0;
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < size; j++) {
+                if (board[i][j] != 0) occupiedCount++;
+            }
+        }
+
+        // Strong center preference for empty or nearly empty board
+        int center = size / 2;
+        if (occupiedCount <= 1 && x == center && y == center) {
+            score += 1500000;
+        }
+
+        if (board[x][y] != 0) return score;
+
+        int[][] tempBoard = deepCopy(board);
+        tempBoard[x][y] = opponent;
+        if (hasFourOrOpenThree(tempBoard, x, y, opponent, true)) {
+            return 5000000;
+        }
+
+        tempBoard = deepCopy(board);
+        tempBoard[x][y] = player;
+        if (hasFourOrOpenThree(tempBoard, x, y, player, true)) {
+            return 4000000;
+        }
+
+        if (hasFourOrOpenThree(tempBoard, x, y, player, false)) {
+            return 4000000;
+        }
+
+        tempBoard = deepCopy(board);
+        tempBoard[x][y] = opponent;
+        if (hasFourOrOpenThree(tempBoard, x, y, opponent, false)) {
+            return 3000000;
+        }
+
+        tempBoard = deepCopy(board);
+        tempBoard[x][y] = player;
+        if (hasWinningPattern(tempBoard, x, y, player)) {
+            return 1000000;
+        }
+
+        tempBoard = deepCopy(board);
+        tempBoard[x][y] = opponent;
+        if (hasWinningPattern(tempBoard, x, y, opponent)) {
+            return 900000;
+        }
+
+        return score;
+    }
+
+    private Move<Gomoku> extractMove(State<Gomoku> rootState, State<Gomoku> childState) {
+        int[][] rootGrid = ((GomokuState) rootState).getBoard();
+        int[][] childGrid = ((GomokuState) childState).getBoard();
+        for (int i = 0; i < rootGrid.length; i++) {
+            for (int j = 0; j < rootGrid[i].length; j++) {
+                if (rootGrid[i][j] != childGrid[i][j]) {
+                    return new GomokuMove(rootState.player(), i, j);
+                }
+            }
+        }
+        return null;
+    }
+
+    private int getPreviousPlayer(State<Gomoku> state) {
+        return state.player() == Gomoku.PLAYER_ONE ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE;
+    }
+
+    private int[][] deepCopy(int[][] original) {
+        int[][] copy = new int[original.length][original[0].length];
+        for (int i = 0; i < original.length; i++) {
+            System.arraycopy(original[i], 0, copy[i], 0, original[i].length);
+        }
+        return copy;
     }
 }

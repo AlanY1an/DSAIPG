@@ -21,9 +21,11 @@ public class MCTS {
 
     public Move<Gomoku> findNextMove(int iterations) {
         for (int i = 0; i < iterations; i++) {
+            // 1. Selection: traverse the tree using UCT to reach a leaf node
             List<SimpleNode<Gomoku>> path = tracePath(root);
             SimpleNode<Gomoku> leaf = path.get(path.size() - 1);
 
+            // 2. Expansion: expand the leaf node if it's not terminal
             if (!leaf.state().isTerminal()) {
                 expandNode(leaf);
                 if (!leaf.children().isEmpty()) {
@@ -33,14 +35,16 @@ public class MCTS {
                 }
             }
 
+            // 3. Simulation: run a random playout from the leaf node
             int reward = simulatePlayout(leaf.state());
 
+            // 4. Backpropagation: update statistics along the traversed path
             for (SimpleNode<Gomoku> node : path) {
                 updateNode(node, reward);
             }
         }
 
-        // 选择最佳子节点
+        // After all iterations, choose the best child based on win rate
         SimpleNode<Gomoku> bestChild = null;
         double bestScore = -Double.MAX_VALUE;
         for (SimpleNode<Gomoku> child : root.children()) {
@@ -56,6 +60,7 @@ public class MCTS {
         return extractMove(root.state(), bestChild.state());
     }
 
+    // Selection phase: follow UCT to trace a path to a promising leaf
     private List<SimpleNode<Gomoku>> tracePath(SimpleNode<Gomoku> node) {
         List<SimpleNode<Gomoku>> path = new ArrayList<>();
         path.add(node);
@@ -66,6 +71,7 @@ public class MCTS {
         return path;
     }
 
+    // Select child node based on UCT value
     private SimpleNode<Gomoku> selectChild(SimpleNode<Gomoku> node) {
         SimpleNode<Gomoku> best = null;
         double bestValue = -Double.MAX_VALUE;
@@ -82,6 +88,7 @@ public class MCTS {
         return best;
     }
 
+    // Expansion phase: add all possible moves as child nodes
     private void expandNode(SimpleNode<Gomoku> node) {
         Collection<Move<Gomoku>> moves = node.state().moves(node.state().player());
         for (Move<Gomoku> move : moves) {
@@ -90,10 +97,11 @@ public class MCTS {
         }
     }
 
+    // Simulation phase: play random moves near existing stones
     private int simulatePlayout(State<Gomoku> state) {
         State<Gomoku> tempState = state;
         int currentPlayer = getPreviousPlayer(tempState);
-        int maxSteps = 50;
+        int maxSteps = 50; // Limit to avoid infinite games
 
         int steps = 0;
         while (!tempState.isTerminal() && steps < maxSteps) {
@@ -107,11 +115,12 @@ public class MCTS {
         return 0; // Loss
     }
 
-
+    // Update node's statistics during backpropagation
     private void updateNode(SimpleNode<Gomoku> node, int reward) {
         node.updateStats(reward);
     }
 
+    // Extract the move that led from rootState to childState
     private Move<Gomoku> extractMove(State<Gomoku> rootState, State<Gomoku> childState) {
         int[][] rootGrid = ((GomokuState) rootState).getBoard();
         int[][] childGrid = ((GomokuState) childState).getBoard();
@@ -125,10 +134,12 @@ public class MCTS {
         return null;
     }
 
+    // Get the player who moved previously
     private int getPreviousPlayer(State<Gomoku> state) {
         return (state.player() == Gomoku.PLAYER_ONE) ? Gomoku.PLAYER_TWO : Gomoku.PLAYER_ONE;
     }
 
+    // Choose a random move near existing stones within a specified range
     private Move<Gomoku> chooseMoveNearStones(State<Gomoku> state, int range) {
         int[][] board = ((GomokuState) state).getBoard();
         List<int[]> candidates = new ArrayList<>();
@@ -136,10 +147,10 @@ public class MCTS {
 
         boolean[][] mark = new boolean[size][size];
 
-        // 标记所有已有棋子周围range范围的空格
+        // Mark all empty cells within 'range' of existing stones
         for (int i = 0; i < size; i++) {
             for (int j = 0; j < size; j++) {
-                if (board[i][j] != 0) { // 有棋子
+                if (board[i][j] != 0) {
                     for (int dx = -range; dx <= range; dx++) {
                         for (int dy = -range; dy <= range; dy++) {
                             int ni = i + dx;
@@ -153,7 +164,7 @@ public class MCTS {
             }
         }
 
-        // 收集所有被标记的空格
+        // Collect all marked empty cells
         for (int i = 0; i < size; i++) {
             for (int j = 0; j < size; j++) {
                 if (mark[i][j]) {
@@ -162,7 +173,7 @@ public class MCTS {
             }
         }
 
-        // 如果没有任何附近空格（比如刚开局），那就随机整个棋盘
+        // If no nearby empty cells found, pick a random move on the whole board
         if (candidates.isEmpty()) {
             return state.chooseMove(state.player());
         } else {
@@ -172,4 +183,3 @@ public class MCTS {
     }
 
 }
-
