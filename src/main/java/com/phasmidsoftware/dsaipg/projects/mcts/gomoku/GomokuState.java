@@ -1,13 +1,9 @@
 package com.phasmidsoftware.dsaipg.projects.mcts.gomoku;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Optional;
-import java.util.Random;
-
 import com.phasmidsoftware.dsaipg.projects.mcts.core.Move;
 import com.phasmidsoftware.dsaipg.projects.mcts.core.State;
+
+import java.util.*;
 
 public class GomokuState implements State<Gomoku> {
     public static final int SIZE = 15;
@@ -73,13 +69,21 @@ public class GomokuState implements State<Gomoku> {
         int[][] dirs = {{1, 0}, {0, 1}, {1, 1}, {1, -1}};
         for (int[] d : dirs) {
             int count = 1;
+            // Check positive direction
             for (int k = 1; k < 5; k++) {
                 int x = row + d[0] * k;
                 int y = col + d[1] * k;
                 if (x < 0 || y < 0 || x >= SIZE || y >= SIZE || board[x][y] != player) break;
                 count++;
             }
-            if (count == 5) return true;
+            // Check negative direction
+            for (int k = 1; k < 5; k++) {
+                int x = row - d[0] * k;
+                int y = col - d[1] * k;
+                if (x < 0 || y < 0 || x >= SIZE || y >= SIZE || board[x][y] != player) break;
+                count++;
+            }
+            if (count >= 5) return true;
         }
         return false;
     }
@@ -103,17 +107,30 @@ public class GomokuState implements State<Gomoku> {
         }
         return sb.toString();
     }
-    @Override
-        public Gomoku game() {
-            return new Gomoku();
-        }
 
     @Override
-        public Random random() {
-            return new Random();
+    public Gomoku game() {
+        return new Gomoku();
+    }
+
+    @Override
+    public Random random() {
+        return new Random();
+    }
+
+    public int[][] getBoard() {
+        return board;
+    }
+
+    @Override
+    public Move<Gomoku> chooseMove(int player) {
+        Collection<Move<Gomoku>> availableMoves = moves(player);
+        if (availableMoves.isEmpty()) {
+            return null;
         }
-    
-        public int[][] getBoard() {
-            return board;
-        }
+        return availableMoves.stream()
+                .skip(random().nextInt(availableMoves.size()))
+                .findFirst()
+                .orElse(null);
+    }
 }

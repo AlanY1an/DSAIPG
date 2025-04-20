@@ -2,105 +2,111 @@ package com.phasmidsoftware.dsaipg.projects.mcts.gomoku;
 
 import com.phasmidsoftware.dsaipg.projects.mcts.core.Move;
 
-import java.util.Optional;
+import java.util.*;
+import java.util.concurrent.*;
 
 public class GomokuMCTSvsMCTSTest {
 
     private static final int GAMES_PER_MODE = 100;
+    private static final int THREADS = 12;
 
     public static void main(String[] args) {
-        testAtIteration(1000, 3000);
+        testAtIteration(1000);
     }
 
-    private static void testAtIteration(int iterationX, int iterationO) {
-        System.out.println("\nMCTS vs MCTS | Iteration: X=" + iterationX + ", O=" + iterationO);
-        System.out.println("| First Player | X Wins | O Wins | Draws | X Win % | O Win % | Draw % | Average time per game |");
+    private static void testAtIteration(int iteration) {
+        System.out.println("Iteration: " + iteration + "\n");
+
+        System.out.println("| First Player | MCTS (X) Wins | MCTS (O) Wins | Draws | X Win % | O Win % | Draw % | Average time per game |");
         System.out.println("| --- | --- | --- | --- | --- | --- | --- | --- |");
 
-        runTest("X first (1000)", true, iterationX, iterationO);
-        runTest("O first (3000)", false, iterationX, iterationO);
-        runAlternatingTest("Alternating", iterationX, iterationO);
+        runTest("X (MCTS) first", true, iteration);
+        runTest("O (MCTS) first", false, iteration);
+        runAlternatingTest("Alternating", iteration);
     }
 
-    private static void runTest(String label, boolean xFirst, int iterationX, int iterationO) {
-        int xWins = 0;
-        int oWins = 0;
-        int draws = 0;
-        long totalTimeNano = 0;
+    private static void runTest(String label, boolean xFirst, int iteration) {
+        ExecutorService executor = Executors.newFixedThreadPool(THREADS);
+        List<Future<long[]>> futures = new ArrayList<>();
 
         for (int i = 0; i < GAMES_PER_MODE; i++) {
-            int opener = xFirst ? Gomoku.PLAYER_ONE : Gomoku.PLAYER_TWO;
-            long start = System.nanoTime();
-            int result = playSingleGame(opener, iterationX, iterationO);
-            long end = System.nanoTime();
-            totalTimeNano += (end - start);
-
-            if (result == Gomoku.PLAYER_ONE) xWins++;
-            else if (result == Gomoku.PLAYER_TWO) oWins++;
-            else draws++;
+            final boolean firstX = xFirst;
+            futures.add(executor.submit(() -> playOneGame(firstX, iteration)));
         }
 
-        double avgMillis = totalTimeNano / 1_000_000.0 / GAMES_PER_MODE;
-        printResultRow(label, xWins, oWins, draws, avgMillis);
+        processResults(label, futures);
+        executor.shutdown();
     }
 
-    private static void runAlternatingTest(String label, int iterationX, int iterationO) {
-        int xWins = 0;
-        int oWins = 0;
-        int draws = 0;
-        long totalTimeNano = 0;
+    private static void runAlternatingTest(String label, int iteration) {
+        ExecutorService executor = Executors.newFixedThreadPool(THREADS);
+        List<Future<long[]>> futures = new ArrayList<>();
+
         boolean xFirst = true;
-
         for (int i = 0; i < GAMES_PER_MODE; i++) {
-            int opener = xFirst ? Gomoku.PLAYER_ONE : Gomoku.PLAYER_TWO;
-            long start = System.nanoTime();
-            int result = playSingleGame(opener, iterationX, iterationO);
-            long end = System.nanoTime();
-            totalTimeNano += (end - start);
-
-            if (result == Gomoku.PLAYER_ONE) xWins++;
-            else if (result == Gomoku.PLAYER_TWO) oWins++;
-            else draws++;
-
+            final boolean firstMoveX = xFirst;
+            futures.add(executor.submit(() -> playOneGame(firstMoveX, iteration)));
             xFirst = !xFirst;
         }
 
-        double avgMillis = totalTimeNano / 1_000_000.0 / GAMES_PER_MODE;
-        printResultRow(label, xWins, oWins, draws, avgMillis);
+        processResults(label, futures);
+        executor.shutdown();
     }
 
-    private static int playSingleGame(int opener, int iterationX, int iterationO) {
-        Gomoku game = new Gomoku();
-        GomokuState state = (GomokuState) game.start();
+    private static void processResults(String label, List<Future<long[]>> futures) {
+        int xWins = 0;
+        int oWins = 0;
+        int draws = 0;
+        long totalTimeNano = 0;
 
-        if (opener == Gomoku.PLAYER_TWO) {
-            state = new GomokuState(state.getBoard(), Gomoku.PLAYER_TWO);
-        }
+        for (Future<long[]> future : futures) {
+            try {
+                long[] result = future.get();
+                int winner = (int) result[0];
+                long timeNano = result[1];
+                totalTimeNano += timeNano;
 
-        while (!state.isTerminal()) {
-            Move<Gomoku> move;
-            if (state.player() == Gomoku.PLAYER_ONE) {
-                GomokuNode rootNode = new GomokuNode(state);
-                MCTS mcts = new MCTS(rootNode);
-                move = mcts.findNextMove(iterationX);
-            } else {
-                GomokuNode rootNode = new GomokuNode(state);
-                MCTS mcts = new MCTS(rootNode);
-                move = mcts.findNextMove(iterationO);
+                if (winner == Gomoku.PLAYER_ONE) xWins++;
+                else if (winner == Gomoku.PLAYER_TWO) oWins++;
+                else draws++;
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-            state = (GomokuState) state.next(move);
         }
 
-        Optional<Integer> winner = state.winner();
-        return winner.orElse(0);
-    }
-
-    private static void printResultRow(String label, int xWins, int oWins, int draws, double avgMillis) {
         double total = xWins + oWins + draws;
         double xWinPercent = (xWins / total) * 100;
         double oWinPercent = (oWins / total) * 100;
         double drawPercent = (draws / total) * 100;
+        double avgMillis = totalTimeNano / 1_000_000.0 / GAMES_PER_MODE;
+
         System.out.printf("| %s | %d | %d | %d | %.2f%% | %.2f%% | %.2f%% | %.2f ms |\n",
                 label, xWins, oWins, draws, xWinPercent, oWinPercent, drawPercent, avgMillis);
+    }
+
+    private static long[] playOneGame(boolean xFirst, int iteration) {
+        Gomoku game = new Gomoku();
+        GomokuState state = (GomokuState) game.start();
+
+        if (!xFirst) {
+            state = new GomokuState(state.getBoard(), Gomoku.PLAYER_TWO);
+        }
+
+        long start = System.nanoTime();
+
+        while (!state.isTerminal()) {
+            Move<Gomoku> move;
+            GomokuNode rootNode = new GomokuNode(state);
+            MCTS mcts = new MCTS(rootNode);
+            move = mcts.findNextMove(iteration);
+            state = (GomokuState) state.next(move);
+        }
+
+        long end = System.nanoTime();
+        Optional<Integer> winner = state.winner();
+        int result = winner.orElse(0);
+        long duration = end - start;
+
+        return new long[]{result, duration};
     }
 }

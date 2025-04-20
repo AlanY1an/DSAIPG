@@ -22,6 +22,14 @@ public class GomokuMove implements Move<Gomoku> {
         return new int[]{row, col};
     }
 
+    public int getX() {
+        return row;
+    }
+
+    public int getY() {
+        return col;
+    }
+
     @Override
     public String toString() {
         return "[" + row + ", " + col + "]";
@@ -31,4 +39,3 @@ public class GomokuMove implements Move<Gomoku> {
         return player;
     }
 }
-
